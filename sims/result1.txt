@@ -1,0 +1,171 @@
+--------------------------------------------------------------------------------
+default - No data
+--------------------------------------------------------------------------------
+default:sim_old.Simulation
+Average Time Count Line Number: Code                                                                                                           
+                             6: class Simulation:                                                                                              
+                             7:     """A fluid dynamics simulation using the Smoothed Particle Hydrodynamics method."""                        
+                             8:                                                                                                                
+                             9:     def __init__(                                                                                              
+                            10:         self,                                                                                                  
+                            11:         amount: int,                                                                                           
+                            12:         dimensions: int,                                                                                       
+                            13:         device: torch.device | None = None,                                                                    
+                            14:         x1=0,                                                                                                  
+                            15:         x2=1000,                                                                                               
+                            16:         y1=0,                                                                                                  
+                            17:         y2=500,                                                                                                
+                            18:     ) -> None:                                                                                                 
+  2.447ms      1            19:         self.device = get_device() if device is None else device                                               
+                            20:                                                                                                                
+  0.769ms      1            21:         self.amount = amount                                                                                   
+  24.300ms     1            22:         self.set_bounds(x1, x2, y1, y2)                                                                        
+  1.501ms      1            23:         self.gravity = torch.tensor([0, 50], device=device)                                                    
+  0.760ms      1            24:         self.smoothing_radius = 30                                                                             
+  0.727ms      1            25:         self.simulate_pressure = True                                                                          
+  0.723ms      1            26:         self.simulate_gravity = True                                                                           
+                            27:                                                                                                                
+ 1578.606ms    1            28:         self.setup_particles(amount, dimensions)                                                               
+                            29:                                                                                                                
+                            30:     def setup_particles(self, amount: int, dimensions: int) -> None:                                           
+                            31:         """Set up the particles in a grid."""                                                                  
+                            32:                                                                                                                
+  1.371ms      1            33:         self.amount = amount                                                                                   
+  1.376ms      1            34:         self.dimensions = dimensions                                                                           
+  3.056ms      1            35:         self.particles = torch.zeros(                                                                          
+                            36:             (amount, dimensions), dtype=torch.float32, device=self.device                                      
+                            37:         )                                                                                                      
+  1.395ms      1            38:         self.predicted_positions = self.particles                                                              
+  1.391ms      1            39:         self.velocities = torch.zeros(                                                                         
+                            40:             (amount, dimensions), dtype=torch.float32, device=self.device                                      
+                            41:         )                                                                                                      
+  1.408ms      1            42:         self.accelerations = torch.zeros((amount, dimensions), device=self.device)                             
+  1.407ms      1            43:         self.densities = torch.zeros(amount, device=self.device)                                               
+ 151.914ms     1            44:         self.shared_pressure_mask = torch.ones(                                                                
+                            45:             (amount, amount), device=self.device                                                               
+                            46:         ) - torch.eye(amount, device=self.device)                                                              
+ 169.558ms     1            47:         self.target_density = (                                                                                
+                            48:             self.smoothing_kernel(torch.tensor([0.0], device=self.device)) * 0.5                               
+                            49:         )                                                                                                      
+  3.205ms      1            50:         self.pressure_multiplier = torch.tensor(3e6, device=self.device)                                       
+                            51:                                                                                                                
+  1.430ms      1            52:         grid_size = math.ceil(math.sqrt(amount))                                                               
+  5.834ms      1            53:         x0, y0 = self.bounds[0]                                                                                
+  40.950ms     1            54:         x1, y1 = self.bounds[1] / 2                                                                            
+                            55:                                                                                                                
+                            56:         # Set up the particles in a grid                                                                       
+                            57:         for i in range(amount):                                                                                
+  1.164ms     1000          58:             self.particles[i] = torch.tensor(                                                                  
+                            59:                 [                                                                                              
+                            60:                     x0 + ((x1 - x0) / (1 + grid_size)) * (i % grid_size),                                      
+                            61:                     y0 + ((y1 - y0) / (1 + grid_size)) * (i // grid_size),                                     
+                            62:                 ],                                                                                             
+                            63:                 device=self.device,                                                                            
+                            64:             )                                                                                                  
+                            65:                                                                                                                
+                            66:     def set_bounds(self, x1, x2, y1, y2):                                                                      
+  20.789ms     1            67:         self.bounds = torch.tensor([[x1, y1], [x2, y2]], device=self.device)                                   
+                            68:         # area = torch.prod(self.bounds[1] - self.bounds[0])                                                   
+                            69:         # self.target_density = self.amount / area                                                             
+                            70:                                                                                                                
+                            71:     def step(self, dt: float) -> None:                                                                         
+                            72:         """Step the simulation forward by dt seconds."""                                                       
+                            73:                                                                                                                
+  0.012ms     1001          74:         self.velocities = torch.zeros_like(self.velocities)                                                    
+                            75:         if self.simulate_gravity:                                                                              
+  0.232ms     1001          76:             self.velocities += self.gravity * dt                                                               
+  0.204ms     1001          77:         self.predicted_positions = self.particles + self.velocities * dt                                       
+  0.884ms     1001          78:         self.update_densities()                                                                                
+                            79:                                                                                                                
+  8.711ms     1001          80:         pressure_forces = self.calc_pressure_force2(self.predicted_positions)                                  
+                            81:         # TODO: dividing by densities unncecessary? (see end of calc_pressure_force2, multiplying by densities)
+  0.220ms     1001          82:         self.accelerations = -pressure_forces / self.densities[:, None]                                        
+                            83:         if self.simulate_pressure:                                                                             
+  0.165ms     1001          84:             self.velocities += self.accelerations * dt                                                         
+                            85:                                                                                                                
+                            86:         # for i, particle in enumerate(self.particles):                                                        
+                            87:         #     pressure_force = self.calc_pressure_force(particle)                                              
+                            88:         #     self.accelerations[i] = pressure_force / self.densities[i]                                       
+                            89:         #     self.velocities[i] += self.accelerations[i] * dt                                                 
+                            90:                                                                                                                
+  0.130ms     1001          91:         self.particles += self.velocities * dt                                                                 
+                            92:                                                                                                                
+  0.122ms     1001          93:         self.particles = torch.max(self.particles, self.bounds[0])                                             
+  0.123ms     1001          94:         self.particles = torch.min(self.particles, self.bounds[1])                                             
+                            95:                                                                                                                
+                            96:         # self.particles += torch.rand_like(self.particles) * 1e-2                                             
+                            97:                                                                                                                
+                            98:     def calc_density(self, sample_points: torch.Tensor) -> torch.Tensor:                                       
+                            99:         """Calculate the density at a point."""                                                                
+                           100:                                                                                                                
+  0.009ms     1001         101:         sample_points = sample_points.reshape(-1, self.dimensions)                                             
+  0.131ms     1001         102:         diffs = sample_points.unsqueeze(1) - self.predicted_positions.unsqueeze(0)                             
+  0.144ms     1001         103:         dists = torch.norm(diffs, dim=-1)                                                                      
+  0.469ms     1001         104:         kernel_vals = self.smoothing_kernel(dists)                                                             
+                           105:         return torch.sum(kernel_vals, dim=-1)                                                                  
+                           106:                                                                                                                
+                           107:     def smoothing_kernel(self, dist: torch.Tensor) -> torch.Tensor:                                            
+                           108:         """Calculate the kernel function."""                                                                   
+  0.007ms     1002         109:         scale = 6 / (math.pi * pow(self.smoothing_radius, 4))                                                  
+  0.319ms     1002         110:         value = torch.max(torch.zeros_like(dist), self.smoothing_radius - dist)                                
+                           111:         # TODO: this is same as in smoothing_kernel_gradient                                                   
+                           112:         return value * value * scale                                                                           
+                           113:                                                                                                                
+                           114:     def smoothing_kernel_gradient(self, dist: torch.Tensor) -> torch.Tensor:                                   
+                           115:         """Calculate the gradient of the kernel function."""                                                   
+  0.003ms     1001         116:         scale = -12 / (math.pi * pow(self.smoothing_radius, 4))                                                
+                           117:         return torch.max(torch.zeros_like(dist), self.smoothing_radius - dist) * scale                         
+                           118:                                                                                                                
+                           119:     def update_densities(self):                                                                                
+  0.880ms     1001         120:         self.densities = self.calc_density(self.predicted_positions)                                           
+                           121:                                                                                                                
+                           122:     def density_to_pressure(self, density: torch.Tensor) -> torch.Tensor:                                      
+                           123:         """Convert density to pressure."""                                                                     
+  0.113ms     1001         124:         density_diff = density - self.target_density                                                           
+  0.110ms     1001         125:         density_diff *= self.pressure_multiplier                                                               
+                           126:         return density_diff                                                                                    
+                           127:                                                                                                                
+                           128:     def calc_pressure_force(self, sample_point: torch.Tensor) -> torch.Tensor:                                 
+                           129:         """Calculate the gradient at a point."""                                                               
+                           130:         dists = torch.norm(sample_point - self.predicted_positions, dim=1)                                     
+                           131:         dirs1 = (self.predicted_positions - sample_point).T                                                    
+                           132:         dirs2 = dirs1 / dists                                                                                  
+                           133:         dirs2 = torch.where(torch.isnan(dirs2), torch.zeros_like(dirs2), dirs2)                                
+                           134:         slopes = self.smoothing_kernel_gradient(dists)                                                         
+                           135:         kernel_vals = (                                                                                        
+                           136:             self.density_to_pressure(self.densities)                                                           
+                           137:             * dirs2                                                                                            
+                           138:             * slopes                                                                                           
+                           139:             / self.densities                                                                                   
+                           140:             * (dists > 0)                                                                                      
+                           141:             * (dists < self.smoothing_radius)                                                                  
+                           142:         )                                                                                                      
+                           143:         force = torch.sum(kernel_vals, dim=1)                                                                  
+                           144:         return force                                                                                           
+                           145:                                                                                                                
+                           146:     def calc_pressure_force2(self, sample_point: torch.Tensor) -> torch.Tensor:                                
+                           147:         """Calculate the gradient at a point."""                                                               
+                           148:         # TODO: many same lines as in calc_density2                                                            
+  0.004ms     1001         149:         sample_point = sample_point.reshape(-1, 2)                                                             
+  0.083ms     1001         150:         diffs = sample_point.unsqueeze(1) - self.predicted_positions.unsqueeze(0)                              
+  0.073ms     1001         151:         dists = torch.norm(diffs, dim=-1)                                                                      
+                           152:         # dirs = self.shared_pressure_mask[:, :, None] * diffs / dists[:, :, None]                             
+  0.121ms     1001         153:         dirs = diffs / dists[:, :, None]                                                                       
+  3.305ms     1001         154:         dirs[torch.eye(self.amount, device=self.device, dtype=bool)] = 0                                       
+  0.267ms     1001         155:         dirs = torch.where(torch.isnan(dirs), torch.zeros_like(dirs), dirs)                                    
+  0.234ms     1001         156:         slopes = self.smoothing_kernel_gradient(dists)                                                         
+  0.232ms     1001         157:         pressures = self.density_to_pressure(self.densities)                                                   
+  0.192ms     1001         158:         shared_pressures = (pressures[None, :] + pressures[:, None]) * 0.5                                     
+  3.677ms     1001         159:         shared_pressures[torch.eye(shared_pressures.shape[0]).bool()] = 0                                      
+  0.361ms     1001         160:         kernel_vals = (shared_pressures * slopes / self.densities[None, :])[                                   
+                           161:             :, :, None                                                                                         
+                           162:         ] * dirs                                                                                               
+                           163:                                                                                                                
+  0.123ms     1001         164:         forces = torch.sum(kernel_vals, dim=1)                                                                 
+                           165:         return forces                                                                                          
+--------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+default
+  FPS   
+103.1fps
+--------------------------------------------------------------------------------

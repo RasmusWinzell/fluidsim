@@ -1,0 +1,26 @@
+tell application "Microsoft PowerPoint"
+    activate
+    
+    set targetShapeName to "#sim"
+    
+    try
+        -- Check if PowerPoint is running
+        if not (running) then
+            display dialog "Microsoft PowerPoint is not running. Please open it and try again."
+            return
+        end if
+        
+        -- Open the presentation if not already open
+        set presentationName to "{}" -- Replace with your actual presentation name
+        try
+            set targetPresentation to presentation presentationName
+        on error
+            set targetPresentation to open POSIX file "{}" -- Replace with the actual path to your presentation
+        end try
+
+        save targetPresentation in "slides.pdf" as save as PDF -- Replace with the actual path to your presentation
+        
+    on error errMsg
+        display dialog "Error: " & errMsg
+    end try
+end tell

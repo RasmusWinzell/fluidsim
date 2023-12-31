@@ -1,0 +1,46 @@
+tell application "Microsoft PowerPoint"
+    activate
+    
+    set targetShapeName to "#sim"
+    
+    try
+        -- Check if PowerPoint is running
+        if not (running) then
+            display dialog "Microsoft PowerPoint is not running. Please open it and try again."
+            return
+        end if
+        
+        -- Open the presentation if not already open
+        set presentationName to "{}" -- Replace with your actual presentation name
+        try
+            set targetPresentation to presentation presentationName
+        on error
+            set targetPresentation to open POSIX file "{}" -- Replace with the actual path to your presentation
+        end try
+        
+        repeat with j from 1 to count of slides of targetPresentation
+            set targetSlide to slide j of targetPresentation
+
+            
+
+            set shapeFound to false
+            
+            -- Iterate through each shape on the specified slide
+            repeat with i from 1 to count of shapes of targetSlide
+                set currentShape to shape i of targetSlide
+                if name of currentShape is equal to targetShapeName then
+                    set shapeFound to true
+                    set imageFileName to "sim" & j & ".png" -- Replace with the actual path to your image
+                    
+                    -- Export the shape as an image
+                    tell currentShape
+                        save as picture file name imageFileName
+                    end tell
+                    exit repeat
+                end if
+            end repeat
+        end repeat
+    on error errMsg
+        display dialog "Error: " & errMsg
+    end try
+end tell
